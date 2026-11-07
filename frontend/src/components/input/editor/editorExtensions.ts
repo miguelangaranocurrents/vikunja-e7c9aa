@@ -3,7 +3,7 @@ import {nextTick, toValue, type MaybeRefOrGetter, type Ref} from 'vue'
 import StarterKit from '@tiptap/starter-kit'
 import {createNodeFromContent, Extension, mergeAttributes, type Editor, type Extensions} from '@tiptap/core'
 import {Plugin, PluginKey} from '@tiptap/pm/state'
-import {Fragment} from '@tiptap/pm/model'
+import {Fragment, type Slice, type Node as PMNode} from '@tiptap/pm/model'
 import {marked} from 'marked'
 
 import Link from '@tiptap/extension-link'
@@ -223,6 +223,80 @@ export function createEditorExtensions(deps: EditorExtensionDeps): Extensions {
 		},
 	})
 
+	// Plain text copies keep the list structure: ProseMirror's own serializer
+	// flattens lists to their bare text, which loses the markers when the
+	// clipboard content lands in a plain text field.
+	function leafToPlainText(node: PMNode): string {
+		const spec = node.type.spec as unknown as {renderText?: (props: {node: PMNode}) => string}
+		if (typeof spec.renderText === 'function') {
+			return spec.renderText({node})
+		}
+
+		return node.textContent
+	}
+
+	function nodeToPlainText(node: PMNode, depth: number): string {
+		if (node.isText) {
+			return node.text ?? ''
+		}
+
+		if (node.isLeaf) {
+			return node.type.name === 'hardBreak' ? '\n' : leafToPlainText(node)
+		}
+
+		if (node.type.name === 'bulletList' || node.type.name === 'orderedList' || node.type.name === 'taskList') {
+			const isOrdered = node.type.name === 'orderedList'
+			const isTaskList = node.type.name === 'taskList'
+			const start = Number(node.attrs.start ?? 1)
+			const indent = '\t'.repeat(depth)
+			const lines: string[] = []
+			let index = 0
+
+			node.forEach(item => {
+				let marker = '- '
+				if (isOrdered) {
+					marker = `${start + index}. `
+				} else if (isTaskList) {
+					marker = item.attrs.checked ? '- [x] ' : '- [ ] '
+				}
+
+				lines.push(indent + marker + childrenToPlainText(item, depth + 1))
+				index++
+			})
+
+			return lines.join('\n')
+		}
+
+		return childrenToPlainText(node, depth)
+	}
+
+	function childrenToPlainText(node: PMNode, depth: number): string {
+		const parts: string[] = []
+		node.forEach(child => parts.push(nodeToPlainText(child, depth)))
+		return parts.join('\n')
+	}
+
+	function sliceToPlainText(slice: Slice): string {
+		const parts: string[] = []
+		slice.content.forEach(child => parts.push(nodeToPlainText(child, 0)))
+		return parts.join('\n')
+	}
+
+	const CopyAsText = Extension.create({
+		name: 'copyAsText',
+
+		addProseMirrorPlugins() {
+			return [
+				new Plugin({
+					key: new PluginKey('copyAsText'),
+					props: {
+						clipboardTextSerializer: slice => sliceToPlainText(slice),
+					},
+				}),
+			]
+		},
+	})
+
 	const PasteHandler = Extension.create({
 		name: 'pasteHandler',
 
@@ -405,5 +479,6 @@ export function createEditorExtensions(deps: EditorExtensionDeps): Extensions {
 		EmojiExtension,
 
 		PasteHandler,
+		CopyAsText,
 	]
 }

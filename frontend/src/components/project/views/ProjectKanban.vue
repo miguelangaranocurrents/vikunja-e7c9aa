@@ -20,6 +20,7 @@
 		<template #default>
 			<div class="kanban-view">
 				<div
+					ref="boardEl"
 					:class="{ 'is-loading': showInitialLoading, 'is-dragging': drag || dragBucket }"
 					class="kanban kanban-bucket-container loader-container"
 				>
@@ -33,7 +34,7 @@
 						:component-data="bucketDraggableComponentData"
 						@update:modelValue="updateBuckets"
 						@end="updateBucketPosition"
-						@start="() => dragBucket = true"
+						@start="handleBucketDragStart"
 					>
 						<template #item="{element: bucket, index: bucketIndex }">
 							<li
@@ -301,7 +302,7 @@ import {
 	useUpdateBucketMutation,
 	useLoadBucketPageMutation,
 } from '@/client/queries/kanbanMutations'
-import {computed, nextTick, ref, watch, toRef} from 'vue'
+import {computed, nextTick, ref, watch, toRef, onBeforeUnmount} from 'vue'
 import {useQuery, useQueryClient} from '@tanstack/vue-query'
 import {useRouter} from 'vue-router'
 import {useRouteQuery} from '@vueuse/router'
@@ -380,6 +381,69 @@ const bucketLimitInputRef = ref<HTMLInputElement | null>(null)
 const drag = ref(false)
 const dragBucket = ref(false)
 const sourceBucket = ref(0)
+
+// The board only scrolls while a drag is close to one of its horizontal edges.
+const BOARD_SCROLL_ZONE = 80
+// px per millisecond, so the scroll speed does not depend on the frame rate
+const BOARD_SCROLL_SPEED = 1.5
+const BOARD_SCROLL_MAX_FRAME = 100
+
+const boardEl = ref<HTMLElement | null>(null)
+let boardAutoScrollFrame: number | null = null
+let boardPointerX: number | null = null
+let boardLastScrollFrame: number | null = null
+
+function trackBoardPointer(e: MouseEvent) {
+	boardPointerX = e.clientX
+}
+
+function stopBoardAutoScroll() {
+	if (boardAutoScrollFrame !== null) {
+		cancelAnimationFrame(boardAutoScrollFrame)
+		boardAutoScrollFrame = null
+	}
+
+	document.removeEventListener('mousemove', trackBoardPointer, true)
+	boardPointerX = null
+	boardLastScrollFrame = null
+}
+
+function boardAutoScrollStep() {
+	if (!drag.value && !dragBucket.value) {
+		stopBoardAutoScroll()
+		return
+	}
+
+	const el = boardEl.value
+	const now = performance.now()
+	const delta = boardLastScrollFrame === null
+		? 16
+		: Math.min(now - boardLastScrollFrame, BOARD_SCROLL_MAX_FRAME)
+	boardLastScrollFrame = now
+
+	if (el !== null && boardPointerX !== null) {
+		const rect = el.getBoundingClientRect()
+		const step = BOARD_SCROLL_SPEED * delta
+		if (boardPointerX > rect.right - BOARD_SCROLL_ZONE) {
+			el.scrollLeft += step
+		} else if (boardPointerX < rect.left + BOARD_SCROLL_ZONE) {
+			el.scrollLeft -= step
+		}
+	}
+
+	boardAutoScrollFrame = requestAnimationFrame(boardAutoScrollStep)
+}
+
+function startBoardAutoScroll() {
+	if (boardAutoScrollFrame !== null) {
+		return
+	}
+
+	document.addEventListener('mousemove', trackBoardPointer, true)
+	boardAutoScrollFrame = requestAnimationFrame(boardAutoScrollStep)
+}
+
+onBeforeUnmount(() => stopBoardAutoScroll())
 
 const showBucketDeleteModal = ref(false)
 const bucketToDelete = ref(0)
@@ -565,6 +629,7 @@ async function updateTaskPosition(e: SortableEvent & {originalEvent?: MouseEvent
 	const project = projectId.value
 	const view = props.viewId
 	drag.value = false
+	stopBoardAutoScroll()
 	try {
 		const {moved} = await handleTaskDropToProject(e, task => {
 			// A moved task stays in a pseudo-project board (favorites, saved filters) until the board is re-read.
@@ -725,6 +790,7 @@ function handleRecurringTaskCompletion() {
 async function updateBucketPosition(e: { item: HTMLElement }) {
 	// (2) bucket positon is changed
 	dragBucket.value = false
+	stopBoardAutoScroll()
 
 	// Sortable reports a DOM index which can point past the last bucket, for example while a
 	// deleted bucket is still leaving the transition group. The buckets are already updated here.
@@ -791,6 +857,12 @@ function shouldAcceptDrop(bucket: BucketResponse) {
 function dragstart(bucket: BucketResponse) {
 	drag.value = true
 	sourceBucket.value = bucket.id
+	startBoardAutoScroll()
+}
+
+function handleBucketDragStart() {
+	dragBucket.value = true
+	startBoardAutoScroll()
 }
 
 function handleTaskDragStart(e: SortableEvent) {
