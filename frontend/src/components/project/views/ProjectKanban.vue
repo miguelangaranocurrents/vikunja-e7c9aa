@@ -20,7 +20,6 @@
 		<template #default>
 			<div class="kanban-view">
 				<div
-					ref="boardEl"
 					:class="{ 'is-loading': showInitialLoading, 'is-dragging': drag || dragBucket }"
 					class="kanban kanban-bucket-container loader-container"
 				>
@@ -302,7 +301,7 @@ import {
 	useUpdateBucketMutation,
 	useLoadBucketPageMutation,
 } from '@/client/queries/kanbanMutations'
-import {computed, nextTick, ref, watch, toRef, onBeforeUnmount} from 'vue'
+import {computed, nextTick, ref, watch, toRef, onBeforeUnmount, onMounted} from 'vue'
 import {useQuery, useQueryClient} from '@tanstack/vue-query'
 import {useRouter} from 'vue-router'
 import {useRouteQuery} from '@vueuse/router'
@@ -384,17 +383,45 @@ const sourceBucket = ref(0)
 
 // The board only scrolls while a drag is close to one of its horizontal edges.
 const BOARD_SCROLL_ZONE = 80
-// px per millisecond, so the scroll speed does not depend on the frame rate
+// px per millisecond, so the covered distance depends on elapsed time rather
+// than on how often the scroll is triggered
 const BOARD_SCROLL_SPEED = 1.5
-const BOARD_SCROLL_MAX_FRAME = 100
+const BOARD_SCROLL_MAX_STEP = 500
 
-const boardEl = ref<HTMLElement | null>(null)
-let boardAutoScrollFrame: number | null = null
 let boardPointerX: number | null = null
-let boardLastScrollFrame: number | null = null
+let boardLastScrollTime: number | null = null
+let boardAutoScrollFrame: number | null = null
 
+function scrollBoardTowardPointer() {
+	if (boardPointerX === null || (!drag.value && !dragBucket.value)) {
+		return
+	}
+
+	const el = document.querySelector<HTMLElement>('.kanban-view > .kanban')
+	if (el === null) {
+		return
+	}
+
+	const now = performance.now()
+	const delta = boardLastScrollTime === null
+		? 16
+		: Math.min(now - boardLastScrollTime, BOARD_SCROLL_MAX_STEP)
+	boardLastScrollTime = now
+
+	const rect = el.getBoundingClientRect()
+	const step = BOARD_SCROLL_SPEED * delta
+	if (boardPointerX > rect.right - BOARD_SCROLL_ZONE) {
+		el.scrollLeft += step
+	} else if (boardPointerX < rect.left + BOARD_SCROLL_ZONE) {
+		el.scrollLeft -= step
+	}
+}
+
+// Pointer events drive the scroll directly so it keeps moving while the mouse
+// sits still near an edge; animation frames keep it smooth in between.
 function trackBoardPointer(e: MouseEvent) {
 	boardPointerX = e.clientX
+	scrollBoardTowardPointer()
 }
 
 function stopBoardAutoScroll() {
@@ -403,9 +430,7 @@ function stopBoardAutoScroll() {
 		boardAutoScrollFrame = null
 	}
 
-	document.removeEventListener('mousemove', trackBoardPointer, true)
-	boardPointerX = null
-	boardLastScrollFrame = null
+	boardLastScrollTime = null
 }
 
 function boardAutoScrollStep() {
@@ -414,23 +439,7 @@ function boardAutoScrollStep() {
 		return
 	}
 
-	const el = boardEl.value
-	const now = performance.now()
-	const delta = boardLastScrollFrame === null
-		? 16
-		: Math.min(now - boardLastScrollFrame, BOARD_SCROLL_MAX_FRAME)
-	boardLastScrollFrame = now
-
-	if (el !== null && boardPointerX !== null) {
-		const rect = el.getBoundingClientRect()
-		const step = BOARD_SCROLL_SPEED * delta
-		if (boardPointerX > rect.right - BOARD_SCROLL_ZONE) {
-			el.scrollLeft += step
-		} else if (boardPointerX < rect.left + BOARD_SCROLL_ZONE) {
-			el.scrollLeft -= step
-		}
-	}
-
+	scrollBoardTowardPointer()
 	boardAutoScrollFrame = requestAnimationFrame(boardAutoScrollStep)
 }
 
@@ -439,11 +448,16 @@ function startBoardAutoScroll() {
 		return
 	}
 
-	document.addEventListener('mousemove', trackBoardPointer, true)
+	boardLastScrollTime = null
 	boardAutoScrollFrame = requestAnimationFrame(boardAutoScrollStep)
 }
 
-onBeforeUnmount(() => stopBoardAutoScroll())
+onMounted(() => document.addEventListener('mousemove', trackBoardPointer, true))
+
+onBeforeUnmount(() => {
+	document.removeEventListener('mousemove', trackBoardPointer, true)
+	stopBoardAutoScroll()
+})
 
 const showBucketDeleteModal = ref(false)
 const bucketToDelete = ref(0)
