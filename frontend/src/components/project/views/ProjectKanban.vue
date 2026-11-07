@@ -393,12 +393,18 @@ let boardLastScrollTime: number | null = null
 let boardAutoScrollFrame: number | null = null
 
 function scrollBoardTowardPointer() {
-	if (boardPointerX === null || (!drag.value && !dragBucket.value)) {
+	if (!drag.value && !dragBucket.value) {
+		return
+	}
+
+	if (boardPointerX === null) {
+		console.debug('[kanban-scroll] pointer missing')
 		return
 	}
 
 	const el = document.querySelector<HTMLElement>('.kanban-view > .kanban')
 	if (el === null) {
+		console.debug('[kanban-scroll] board missing')
 		return
 	}
 
@@ -410,11 +416,13 @@ function scrollBoardTowardPointer() {
 
 	const rect = el.getBoundingClientRect()
 	const step = BOARD_SCROLL_SPEED * delta
+	const before = el.scrollLeft
 	if (boardPointerX > rect.right - BOARD_SCROLL_ZONE) {
 		el.scrollLeft += step
 	} else if (boardPointerX < rect.left + BOARD_SCROLL_ZONE) {
 		el.scrollLeft -= step
 	}
+	console.debug('[kanban-scroll] pointer', boardPointerX, 'rect', Math.round(rect.left), Math.round(rect.right), 'scroll', Math.round(before), '->', Math.round(el.scrollLeft), 'of', el.scrollWidth, '/', el.clientWidth)
 }
 
 // Pointer events drive the scroll directly so it keeps moving while the mouse
@@ -452,7 +460,10 @@ function startBoardAutoScroll() {
 	boardAutoScrollFrame = requestAnimationFrame(boardAutoScrollStep)
 }
 
-onMounted(() => document.addEventListener('mousemove', trackBoardPointer, true))
+onMounted(() => {
+	console.debug('[kanban-scroll] mounted')
+	document.addEventListener('mousemove', trackBoardPointer, true)
+})
 
 onBeforeUnmount(() => {
 	document.removeEventListener('mousemove', trackBoardPointer, true)
