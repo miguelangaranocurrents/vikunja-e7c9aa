@@ -393,18 +393,12 @@ let boardLastScrollTime: number | null = null
 let boardAutoScrollFrame: number | null = null
 
 function scrollBoardTowardPointer() {
-	if (!drag.value && !dragBucket.value) {
-		return
-	}
-
-	if (boardPointerX === null) {
-		console.debug('[kanban-scroll] pointer missing')
+	if (boardPointerX === null || (!drag.value && !dragBucket.value)) {
 		return
 	}
 
 	const el = document.querySelector<HTMLElement>('.kanban-view > .kanban')
 	if (el === null) {
-		console.debug('[kanban-scroll] board missing')
 		return
 	}
 
@@ -416,17 +410,15 @@ function scrollBoardTowardPointer() {
 
 	const rect = el.getBoundingClientRect()
 	const step = BOARD_SCROLL_SPEED * delta
-	const before = el.scrollLeft
 	if (boardPointerX > rect.right - BOARD_SCROLL_ZONE) {
 		el.scrollLeft += step
 	} else if (boardPointerX < rect.left + BOARD_SCROLL_ZONE) {
 		el.scrollLeft -= step
 	}
-	console.debug('[kanban-scroll] pointer', boardPointerX, 'rect', Math.round(rect.left), Math.round(rect.right), 'scroll', Math.round(before), '->', Math.round(el.scrollLeft), 'of', el.scrollWidth, '/', el.clientWidth)
 }
 
-// Pointer events drive the scroll directly so it keeps moving while the mouse
-// sits still near an edge; animation frames keep it smooth in between.
+// The browser stops emitting mousemove once the drag runs through native HTML5
+// drag events, so dragover keeps the pointer position fresh while dragging.
 function trackBoardPointer(e: MouseEvent) {
 	boardPointerX = e.clientX
 	scrollBoardTowardPointer()
@@ -461,12 +453,13 @@ function startBoardAutoScroll() {
 }
 
 onMounted(() => {
-	console.debug('[kanban-scroll] mounted')
 	document.addEventListener('mousemove', trackBoardPointer, true)
+	document.addEventListener('dragover', trackBoardPointer, true)
 })
 
 onBeforeUnmount(() => {
 	document.removeEventListener('mousemove', trackBoardPointer, true)
+	document.removeEventListener('dragover', trackBoardPointer, true)
 	stopBoardAutoScroll()
 })
 
